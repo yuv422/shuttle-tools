@@ -7,8 +7,8 @@
 void usage() {
     std::cout << "Usage: shuttle-tools <option>" << std::endl;
     std::cout << "Options:" << std::endl;
-    std::cout << " -u <output directory> unpack data file into output directory" << std::endl;
-    std::cout << " -p <directory with unpacked files> <directory for target packed archive> - packs all files in ./dump directory into a new archive." << std::endl;
+    std::cout << " -u <output directory> - unpack data file into output directory" << std::endl;
+    std::cout << " -p <directory with unpacked files> <directory for target packed archive> - packs all files into a new archive." << std::endl;
 }
 
 int main(int argc, char *argv[]) {
