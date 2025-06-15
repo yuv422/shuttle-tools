@@ -4,6 +4,7 @@
 
 #ifndef RESOURCE_H
 #define RESOURCE_H
+#include <filesystem>
 #include <string>
 #include <vector>
 
@@ -11,7 +12,7 @@
 
 struct ResFile {
     std::string name;
-    int unk;
+    int encodingType;
     int uncompressedSize;
     int compressedSize;
     int offset;
@@ -22,10 +23,12 @@ class Resource {
     private:
     std::vector<ResFile> _files;
     std::vector<std::string> _dataFiles;
+    std::filesystem::path _unpackPath;
+    std::filesystem::path _packedPath;
 
 public:
     Resource() = default;
-    bool load();
+    bool unpack(std::filesystem::path path = "dump");
     void dumpAllFiles();
 
 private:
@@ -36,7 +39,7 @@ private:
 
     std::vector<uint8_t> *loadCompressedData(const ResFile &resFile);
 
-    std::vector<uint8_t> decompressRLE(const ResFile &resFile, const std::vector<uint8_t> &compressedData);
+    std::vector<uint8_t> decompressRLE(const std::vector<uint8_t> &compressedData);
 };
 
 #endif //RESOURCE_H

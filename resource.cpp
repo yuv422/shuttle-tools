@@ -17,11 +17,14 @@ std::string str_toupper(std::string s) {
     return s;
 }
 
-bool Resource::load() {
+bool Resource::unpack(std::filesystem::path path) {
     auto index = File("_INDEX");
     if (!index.isOpen()) {
+        std::cerr  << "Failed to open _INDEX file" << std::endl;
         return false;
     }
+
+    _unpackPath = path;
 
     loadDataFiles(index);
     loadResFileEntries(index);
@@ -64,14 +67,13 @@ void Resource::loadResFileEntries(File& index) {
         ResFile file;
         file.name = parseName(index);
         file.dataFileIdx = index.readUInt8();
-        file.unk = index.readUInt8();
+        file.encodingType = index.readUInt8();
         file.offset = index.readUInt32();
         file.compressedSize = index.readUInt32();
         file.uncompressedSize = index.readUInt32();
         _files[i] = file;
-        // index.seekg(10, std::ios::cur);
-        printf("%s: idx=%d, unk = %d, off=%d, comp=%d, uncomp=%d\n",
-            file.name.c_str(), file.dataFileIdx, file.unk, file.offset, file.compressedSize, file.uncompressedSize);
+        printf("%s: idx=%d, encodingType = %d, off=%d, comp=%d, uncomp=%d\n",
+            file.name.c_str(), file.dataFileIdx, file.encodingType, file.offset, file.compressedSize, file.uncompressedSize);
     }
 }
 
@@ -90,12 +92,17 @@ std::string Resource::parseName(File& index) {
 }
 
 void Resource::dumpFile(const ResFile& resFile) {
-    std::filesystem::path path = "dump";
+    std::filesystem::path path = _unpackPath;
+    std::filesystem::create_directory(path);
+
     path /= resFile.name;
     std::ofstream outFile(path, std::ios::binary);
     if (!outFile.is_open()) {
+        std::cerr  << "Failed to open " << path << " file" << std::endl;
         return;
     }
+
+    printf("dumping %s encType: %d\n", resFile.name.c_str(), resFile.encodingType);
 
     auto compressedData = loadCompressedData(resFile);
     if (!compressedData) {
@@ -103,14 +110,13 @@ void Resource::dumpFile(const ResFile& resFile) {
         return;
     }
 
-    printf("dumping %s encType: %d\n", resFile.name.c_str(), resFile.unk);
     auto unkDecomp = UnkDecomp();
-    switch (resFile.unk) {
+    switch (resFile.encodingType) {
     case 0 :
         outFile.write(reinterpret_cast<const char*>(compressedData->data()), resFile.compressedSize);
         break;
     case 1 : {
-            auto decompressedData = decompressRLE(resFile, *compressedData);
+            auto decompressedData = decompressRLE(*compressedData);
             outFile.write(reinterpret_cast<const char*>(decompressedData.data()), decompressedData.size());
             break;
         }
@@ -119,10 +125,9 @@ void Resource::dumpFile(const ResFile& resFile) {
             outFile.write(reinterpret_cast<const char*>(decompressedData.data()), resFile.uncompressedSize);
             break;
         }
-    case 3 :
-        {
+    case 3 : {
             auto rleData = unkDecomp.decompress(*compressedData, resFile.uncompressedSize);
-            auto decompressedData = decompressRLE(resFile, rleData);
+            auto decompressedData = decompressRLE(rleData);
             outFile.write(reinterpret_cast<const char*>(decompressedData.data()), decompressedData.size());
             break;
         }
@@ -135,6 +140,7 @@ void Resource::dumpFile(const ResFile& resFile) {
 std::vector<uint8_t> *Resource::loadCompressedData(const ResFile& resFile) {
     auto data = File(_dataFiles[resFile.dataFileIdx - 1]);
     if (!data.isOpen()) {
+        std::cerr  << "Failed to open archive " << _dataFiles[resFile.dataFileIdx - 1] << " file" << std::endl;
         return nullptr;
     }
     data.seekg(resFile.offset, std::ios::beg);
@@ -147,7 +153,7 @@ std::vector<uint8_t> *Resource::loadCompressedData(const ResFile& resFile) {
     return vec;
 }
 
-std::vector<uint8_t> Resource::decompressRLE(const ResFile& resFile, const std::vector<uint8_t>& compressedData) {
+std::vector<uint8_t> Resource::decompressRLE(const std::vector<uint8_t>& compressedData) {
     int numBytesLeftToWrite = compressedData[1] << 8 | compressedData[0];
     auto uncompressedData = std::vector<uint8_t>();
     uncompressedData.resize(numBytesLeftToWrite);
