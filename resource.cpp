@@ -39,6 +39,29 @@ void Resource::dumpAllFiles() {
     }
 }
 
+bool Resource::pack(const std::filesystem::path& unpackedPath, const std::filesystem::path& packedPath, const std::filesystem::path& originalIndexPath) {
+    auto sortedNames = loadSortedNamesFromIndex(originalIndexPath);
+
+    _files.clear();
+    _dataFiles.clear();
+    _unpackPath = unpackedPath;
+    _packedPath = packedPath;
+
+    std::filesystem::create_directory(_packedPath);
+
+    std::filesystem::path dataFilePath = _packedPath / "_data1";
+    std::remove(dataFilePath.string().c_str());
+    _dataFiles.push_back(dataFilePath.string());
+
+    for (auto const &name : sortedNames) {
+        auto file = _unpackPath / name;
+        addFileToDataFile(0, file);
+    }
+
+    writeIndexFile();
+    return true;
+}
+
 void Resource::loadDataFiles(File& index) {
     index.seekg(12, std::ios::beg);
     auto numFiles = index.readUInt16();
@@ -67,7 +90,7 @@ void Resource::loadResFileEntries(File& index) {
         ResFile file;
         file.name = parseName(index);
         file.dataFileIdx = index.readUInt8();
-        file.encodingType = index.readUInt8();
+        file.encodingType = static_cast<EncodingType>(index.readUInt8());
         file.offset = index.readUInt32();
         file.compressedSize = index.readUInt32();
         file.uncompressedSize = index.readUInt32();
@@ -104,7 +127,7 @@ void Resource::dumpFile(const ResFile& resFile) {
 
     printf("dumping %s encType: %d\n", resFile.name.c_str(), resFile.encodingType);
 
-    auto compressedData = loadCompressedData(resFile);
+    auto compressedData = loadCompressedData(_dataFiles[resFile.dataFileIdx - 1], resFile);
     if (!compressedData) {
         outFile.close();
         return;
@@ -127,6 +150,7 @@ void Resource::dumpFile(const ResFile& resFile) {
         }
     case 3 : {
             auto rleData = unkDecomp.decompress(*compressedData, resFile.uncompressedSize);
+            // outFile.write(reinterpret_cast<const char*>(rleData.data()), resFile.uncompressedSize);
             auto decompressedData = decompressRLE(rleData);
             outFile.write(reinterpret_cast<const char*>(decompressedData.data()), decompressedData.size());
             break;
@@ -137,10 +161,10 @@ void Resource::dumpFile(const ResFile& resFile) {
     delete compressedData;
 }
 
-std::vector<uint8_t> *Resource::loadCompressedData(const ResFile& resFile) {
-    auto data = File(_dataFiles[resFile.dataFileIdx - 1]);
+std::vector<uint8_t> *Resource::loadCompressedData(const std::filesystem::path &dataFilePath, const ResFile& resFile) {
+    auto data = File(dataFilePath.string());
     if (!data.isOpen()) {
-        std::cerr  << "Failed to open archive " << _dataFiles[resFile.dataFileIdx - 1] << " file" << std::endl;
+        std::cerr  << "Failed to open archive " << dataFilePath << " file" << std::endl;
         return nullptr;
     }
     data.seekg(resFile.offset, std::ios::beg);
@@ -195,4 +219,116 @@ std::vector<uint8_t> Resource::decompressRLE(const std::vector<uint8_t>& compres
         }
     }
     return uncompressedData;
+}
+
+void write4Bytes(std::ofstream &file, int value) {
+    file.put(value & 0xff);
+    file.put((value >> 8) & 0xff);
+    file.put((value >> 16) & 0xff);
+    file.put((value >> 24) & 0xff);
+}
+
+void write2Bytes(std::ofstream &file, int value) {
+    file.put(value & 0xff);
+    file.put((value >> 8) & 0xff);
+}
+
+bool Resource::writeIndexFile() {
+    std::ofstream indexFile;
+    std::filesystem::path path = _packedPath / "_INDEX";
+
+    indexFile.open(path, std::ios::binary);
+    indexFile.put('I');
+    indexFile.put('n');
+    indexFile.put('d');
+    indexFile.put('x');
+
+    write4Bytes(indexFile, 0xc); // header size
+    write4Bytes(indexFile, 16 + _dataFiles.size() * 0x50); // offset to start of file records
+    write2Bytes(indexFile, _dataFiles.size()); // number of data archive container files
+    write2Bytes(indexFile, 1); // unknown value
+
+    for (auto pathString : _dataFiles) { // output data archive filename.
+        auto archiveFileName = std::filesystem::path(pathString).filename().string();
+        for (auto chr : archiveFileName) {
+            indexFile.put(chr);
+        }
+        for (int i = 0; i < 0x50 - archiveFileName.size(); i++) {
+            indexFile.put(0);
+        }
+    }
+
+    write2Bytes(indexFile, _files.size()); // number of files added to the resource
+    write2Bytes(indexFile, 1); // unknown value
+
+    for (auto resFile : _files) {
+        for (auto chr : resFile.name) {
+            indexFile.put(chr);
+        }
+        for (int i = 0; i < 12 -  resFile.name.size(); i++) {
+            indexFile.put(' ');
+        }
+        indexFile.put(resFile.dataFileIdx);
+        indexFile.put(resFile.encodingType);
+        write4Bytes(indexFile, resFile.offset);
+        write4Bytes(indexFile, resFile.compressedSize);
+        write4Bytes(indexFile, resFile.uncompressedSize);
+    }
+
+    indexFile.flush();
+    indexFile.close();
+
+    return true;
+}
+
+void Resource::addFileToDataFile(int dataFileIdx, const std::filesystem::path& inFilePath) {
+    std::ofstream dataFile;
+
+    dataFile.open(_dataFiles[dataFileIdx], std::ios::binary | std::ios_base::app);
+
+    auto inFile = File(inFilePath.string());
+    if (!inFile.isOpen()) {
+        std::cerr  << "Failed to open unpacked " << inFilePath << " file" << std::endl;
+        return;
+    }
+
+    dataFile.seekp(0, std::ios::end);
+    int dataOffset = dataFile.tellp();
+
+    ResFile resFile;
+    resFile.name = inFilePath.filename().string();
+    resFile.encodingType = UNCOMPRESSED;
+    resFile.compressedSize = inFile.size();
+    resFile.uncompressedSize = inFile.size();
+    resFile.dataFileIdx = dataFileIdx + 1;
+    resFile.offset = dataOffset;
+
+    _files.push_back(resFile);
+
+    auto buf = new char[resFile.uncompressedSize];
+    inFile.readBytes(buf, resFile.uncompressedSize);
+
+    dataFile.write(buf, resFile.uncompressedSize);
+    dataFile.close();
+}
+
+std::vector<std::string> Resource::loadSortedNamesFromIndex(const std::filesystem::path& originalIndexPath) {
+    auto originalIndexFile = originalIndexPath / "_INDEX";
+    auto originalIndex = File(originalIndexFile.string());
+    if (!originalIndex.isOpen()) {
+        std::cerr  << "Failed to open original _INDEX file" << std::endl;
+        return {};
+    }
+
+    loadResFileEntries(originalIndex);
+
+    std::vector<std::string> sortedNames(_files.size());
+
+    std::transform(
+        _files.begin(), _files.end(), sortedNames.begin(),
+        [](const ResFile& in) {
+            return in.name;
+        }
+    );
+    return sortedNames;
 }

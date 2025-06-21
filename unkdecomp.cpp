@@ -55,13 +55,6 @@ void UnkDecomp::loadDictionary() {
                     _dictNumRecords++;
                 }
             }
-            // int dictVal = 0;
-            // do {
-            //     _dict[_dictNumRecords].idx = _dictNumRecords;
-            //      dictVal = readBits16(_dictEntryNumBits);
-            //     _dict[_dictNumRecords].value = dictVal;
-            //     _dictNumRecords++;
-            // } while (dictVal != 0);
         }
         break;
     case 1:
@@ -330,7 +323,21 @@ int16_t UnkDecomp::runScript(int cx, int dh) {
 void UnkDecomp::runDecomp() {
     int outIdx = 0;
     int cl = 8;
-    for (int i = 0; i < _unk402-1 && _curPos < _compressedData.size(); i++) {
+    for (int i = 0; i < _unk402; i++) {
+        _bitsLeft -= cl;
+        if (_bitsLeft < 0) {
+            cl += _bitsLeft;
+            _byteBuf = _byteBuf << cl;
+            _byteBuf = (_byteBuf & 0xff00) | readCompressedByte();
+            cl = -_bitsLeft;
+            _bitsLeft += 8;
+        }
+        _byteBuf = _byteBuf << cl;
+        int bx = _byteBuf >> 8;
+        cl = _mem[bx + 0x404];
+        if (cl & 0x80) {
+            int ch = cl;
+            cl = 8;
             _bitsLeft -= cl;
             if (_bitsLeft < 0) {
                 cl += _bitsLeft;
@@ -340,32 +347,18 @@ void UnkDecomp::runDecomp() {
                 _bitsLeft += 8;
             }
             _byteBuf = _byteBuf << cl;
-            int bx = _byteBuf >> 8;
-            cl = _mem[bx + 0x404];
-            if (cl & 0x80) {
-                int ch = cl;
-                cl = 8;
-                _bitsLeft -= cl;
-                if (_bitsLeft < 0) {
-                    cl += _bitsLeft;
-                    _byteBuf = _byteBuf << cl;
-                    _byteBuf = (_byteBuf & 0xff00) | readCompressedByte();
-                    cl = -_bitsLeft;
-                    _bitsLeft += 8;
-                }
-                _byteBuf = _byteBuf << cl;
-                cl = _mem[bx + 0x504];
-                int cx = ch << 8 | cl;
-                cx = -cx;
-                cx += 0x404;
-                cx &= 0xffff;
-                int dh = _byteBuf >> 8;
-                cx = runScript(cx, dh);
-                cl = cx & 0xff;
-                _decompData[outIdx++] = cx >> 8;
-            } else {
-                _decompData[outIdx++] = _mem[bx + 0x504];
-            }
+            cl = _mem[bx + 0x504];
+            int cx = ch << 8 | cl;
+            cx = -cx;
+            cx += 0x404;
+            cx &= 0xffff;
+            int dh = _byteBuf >> 8;
+            cx = runScript(cx, dh);
+            cl = cx & 0xff;
+            _decompData[outIdx++] = cx >> 8;
+        } else {
+            _decompData[outIdx++] = _mem[bx + 0x504];
+        }
     }
 }
 
@@ -373,10 +366,9 @@ void UnkDecomp::dumpMem(int offset, int length) {
     for (int i = 0; i < length; i++) {
         printf("%02x", _mem[offset + i]);
 
-            if (i != 0 && (i+1) % 16 == 0) {
-                printf("\n");
-            } else printf(" ");
-
+        if (i != 0 && (i+1) % 16 == 0) {
+            printf("\n");
+        } else printf(" ");
     }
     std::filesystem::path path = "dump";
     path /= "mem";
